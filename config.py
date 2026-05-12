@@ -39,5 +39,9 @@ REQUEST_DELAY_SEC  = float(os.environ.get("REQUEST_DELAY_SEC", 0.2))
 # Watchlist path (relative to repo root)
 WATCHLIST_PATH = os.environ.get("WATCHLIST_PATH", "watchlist.txt")
 
+# Volume eligibility filter (applied at session start)
+MIN_AVG_VOLUME       = int(os.environ.get("MIN_AVG_VOLUME", 5000))
+VOLUME_LOOKBACK_DAYS = int(os.environ.get("VOLUME_LOOKBACK_DAYS", 5))
+
 # Dashboard
 DASHBOARD_TOKEN = os.environ["DASHBOARD_TOKEN"]

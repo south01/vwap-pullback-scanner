@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
+from datetime import timedelta
 
 import requests
 
@@ -18,6 +19,7 @@ from alerts import (
     send_startup,
     send_tier1,
     send_tier2,
+    send_volume_removal,
 )
 from conditions import c2_in_touch_zone, evaluate_tier1
 from indicators import compute_atr, compute_rsi, compute_vwap, rsi_series, session_bars
@@ -67,10 +69,16 @@ def fetch_snapshot(ticker: str) -> dict | None:
 def fetch_vix() -> float | None:
     snap = fetch_snapshot(config.VIX_TICKER)
     if snap is None:
+        log.info("[VIX] Fetch failed — displaying N/A in alerts")
         return None
     try:
-        return snap["ticker"]["day"]["c"]
+        value = snap["ticker"]["day"]["c"]
+        if value is None or float(value) <= 0:
+            log.info("[VIX] Fetch failed — displaying N/A in alerts")
+            return None
+        return float(value)
     except (KeyError, TypeError):
+        log.info("[VIX] Fetch failed — displaying N/A in alerts")
         return None
 
 
@@ -181,12 +189,20 @@ def process_ticker(
         ticker_state.in_touch_zone = False
         log.info("%s | Exited touch zone", ticker)
 
-    # Grind warning
+    # Grind warning — only count real new bars (new timestamp + non-zero volume)
+    latest_bar = indicator_bars[-1]
+    new_bar_appeared = (
+        latest_bar["t"] > ticker_state.last_bar_ts and latest_bar["v"] > 0
+    )
+    if new_bar_appeared:
+        ticker_state.last_bar_ts = latest_bar["t"]
+
     if ticker_state.tier2_fired_for_touch and not ticker_state.grind_warning_fired:
-        if abs(current_price - vwap) / vwap <= config.GRIND_ZONE_PCT:
-            ticker_state.grind_bar_count += 1
-        else:
-            ticker_state.grind_bar_count = 0
+        if new_bar_appeared:
+            if abs(current_price - vwap) / vwap <= config.GRIND_ZONE_PCT:
+                ticker_state.grind_bar_count += 1
+            else:
+                ticker_state.grind_bar_count = 0
         if ticker_state.grind_bar_count >= config.GRIND_MAX_BARS:
             send_grind_warning(ticker, ticker_state.grind_bar_count)
             ticker_state.grind_warning_fired = True
@@ -311,16 +327,70 @@ def process_tier2(
 
 
 # ---------------------------------------------------------------------------
+# Volume eligibility helpers
+# ---------------------------------------------------------------------------
+
+def _avg_session_volume(ticker: str, start_date: str, end_date: str) -> float | None:
+    """Return mean 5-min bar volume during regular session hours, or None on failure."""
+    path = f"/v2/aggs/ticker/{ticker}/range/5/minute/{start_date}/{end_date}"
+    data = _get(path, {"adjusted": "true", "sort": "asc", "limit": 1000})
+    if not data or data.get("resultsCount", 0) == 0:
+        return None
+    vols = []
+    for bar in data["results"]:
+        bar_et = ms_to_et(bar["t"])
+        h, m = bar_et.hour, bar_et.minute
+        if (h, m) >= (9, 30) and (h, m) < (16, 0):
+            vols.append(bar["v"])
+    return sum(vols) / len(vols) if vols else None
+
+
+def _run_volume_eligibility(
+    tickers: list[str],
+) -> tuple[list[str], list[tuple[str, float]]]:
+    """
+    Check every ticker against the minimum average session volume threshold.
+    Returns (active_tickers, [(removed_ticker, avg_vol), ...]).
+    Tickers whose history cannot be fetched are kept active.
+    """
+    now = now_et()
+    end_date   = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    start_date = (now - timedelta(days=config.VOLUME_LOOKBACK_DAYS * 2 + 2)).strftime("%Y-%m-%d")
+
+    active: list[str] = []
+    removed: list[tuple[str, float]] = []
+
+    for ticker in tickers:
+        avg_vol = _avg_session_volume(ticker, start_date, end_date)
+        if avg_vol is None:
+            log.warning("%s | Volume history unavailable — keeping in active scan", ticker)
+            active.append(ticker)
+        elif avg_vol < config.MIN_AVG_VOLUME:
+            log.info(
+                "[%s] REMOVED FROM SESSION — avg vol %.0f below threshold %d",
+                ticker, avg_vol, config.MIN_AVG_VOLUME,
+            )
+            send_volume_removal(ticker, avg_vol)
+            removed.append((ticker, avg_vol))
+        else:
+            active.append(ticker)
+        time.sleep(config.REQUEST_DELAY_SEC)
+
+    return active, removed
+
+
+# ---------------------------------------------------------------------------
 # Scanner
 # ---------------------------------------------------------------------------
 
 class Scanner:
     def __init__(self) -> None:
-        self.watchlist:    list[str] = []
-        self.states:       dict[str, TickerState] = {}
-        self.spy_snapshot: dict | None = None
-        self.vix_value:    float | None = None
-        self.alert_counts: dict[str, dict] = {}
+        self.watchlist:      list[str] = []
+        self.active_tickers: list[str] = []   # watchlist minus low-volume tickers
+        self.states:         dict[str, TickerState] = {}
+        self.spy_snapshot:   dict | None = None
+        self.vix_value:      float | None = None
+        self.alert_counts:   dict[str, dict] = {}
 
         self._last_spy_refresh:   float = 0.0
         self._last_vix_refresh:   float = 0.0
@@ -337,26 +407,32 @@ class Scanner:
         if ticker in self.watchlist:
             return
         self.watchlist.append(ticker)
+        self.active_tickers.append(ticker)
         self.states[ticker] = TickerState(ticker=ticker)
-        state.set_tickers(self.watchlist)
+        state.set_tickers(self.active_tickers)
         log.info("Ticker added: %s", ticker)
 
     def remove_ticker(self, ticker: str) -> None:
         if ticker not in self.watchlist:
             return
         self.watchlist.remove(ticker)
+        if ticker in self.active_tickers:
+            self.active_tickers.remove(ticker)
         self.states.pop(ticker, None)
-        state.set_tickers(self.watchlist)
+        state.set_tickers(self.active_tickers)
         log.info("Ticker removed: %s", ticker)
 
     def setup(self) -> None:
         self.watchlist = load_watchlist(config.WATCHLIST_PATH)
         self.states    = {t: TickerState(ticker=t) for t in self.watchlist}
-        state.set_tickers(self.watchlist)
         state.started_at = now_et().strftime("%Y-%m-%d %H:%M ET")
         log.info("Loaded %d tickers from watchlist", len(self.watchlist))
 
-        send_startup(self.watchlist)
+        active, removed = _run_volume_eligibility(self.watchlist)
+        self.active_tickers = active
+        state.set_tickers(self.active_tickers)
+
+        send_startup(self.active_tickers, removed)
         self._refresh_spy()
         self._refresh_vix()
 
@@ -420,6 +496,11 @@ class Scanner:
         state.reset_day()
         self._last_reset_date = today
 
+        active, removed = _run_volume_eligibility(self.watchlist)
+        self.active_tickers = active
+        state.set_tickers(self.active_tickers)
+        send_startup(self.active_tickers, removed)
+
     def _refresh_spy(self) -> None:
         snap = fetch_snapshot("SPY")
         if snap:
@@ -444,7 +525,7 @@ class Scanner:
         now_str = now_et().strftime("%H:%M:%S ET")
         log.info("--- Main poll cycle %s ---", now_str)
         spy_chg = spy_change_pct(self.spy_snapshot)
-        for ticker in list(self.watchlist):
+        for ticker in list(self.active_tickers):
             try:
                 process_ticker(
                     ticker,
@@ -461,7 +542,7 @@ class Scanner:
 
     def _run_tier2_poll(self) -> None:
         qualifying = [
-            t for t in self.watchlist
+            t for t in self.active_tickers
             if self.states[t].tier1_fired_for_touch and not self.states[t].tier2_fired_for_touch
         ]
         if not qualifying:

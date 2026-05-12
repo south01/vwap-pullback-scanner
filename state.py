@@ -12,6 +12,7 @@ class TickerState:
     consecutive_above_vwap: int = 0
     grind_bar_count: int = 0
     grind_warning_fired: bool = False
+    last_bar_ts: int = 0
 
     def reset(self) -> None:
         """Reset all per-session state. Called at 9:30 AM ET each day."""
@@ -23,6 +24,7 @@ class TickerState:
         self.consecutive_above_vwap = 0
         self.grind_bar_count = 0
         self.grind_warning_fired = False
+        self.last_bar_ts = 0
 
     def new_touch(self) -> None:
         """Advance touch counter and clear per-touch flags."""

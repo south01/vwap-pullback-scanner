@@ -33,13 +33,32 @@ def _send(text: str, retries: int = 3) -> bool:
     return False
 
 
-def send_startup(watchlist: list[str]) -> None:
-    tickers = ", ".join(watchlist[:10])
-    suffix = f" (+{len(watchlist) - 10} more)" if len(watchlist) > 10 else ""
+def send_startup(
+    active: list[str],
+    removed: list[tuple[str, float]] | None = None,
+) -> None:
+    date_str = now_et().strftime("%Y-%m-%d")
+    if len(active) <= 10:
+        tickers_str = ", ".join(active)
+    else:
+        tickers_str = ", ".join(active[:10]) + f" ... (+{len(active) - 10} more)"
+    lines = [
+        f"<b>📋 SCANNER ACTIVE — {date_str}</b>",
+        f"✅ Scanning: {tickers_str} ({len(active)} tickers)",
+    ]
+    if removed:
+        removed_str = ", ".join(f"{t} (low volume)" for t, _ in removed)
+        lines.append(f"🚫 Removed: {removed_str}")
+    lines.append(f"Polling every {config.POLL_INTERVAL_SEC}s | Session: 9:30–15:55 ET")
+    _send("\n".join(lines))
+
+
+def send_volume_removal(ticker: str, avg_vol: float) -> None:
     _send(
-        f"<b>🚀 VWAP Scanner online</b>\n"
-        f"Watching {len(watchlist)} tickers: {tickers}{suffix}\n"
-        f"VIX max: {config.VIX_MAX} | Touch max: {config.MAX_VWAP_TOUCHES}"
+        f"<b>🚫 WATCHLIST REMOVAL</b>\n"
+        f"{ticker} dropped for this session\n"
+        f"Reason: Avg 5-min volume {avg_vol:.0f} &lt; minimum {config.MIN_AVG_VOLUME}\n"
+        f"(Based on last {config.VOLUME_LOOKBACK_DAYS} trading days)"
     )
 
 
@@ -52,16 +71,17 @@ def send_tier1(
     rsi: float,
     sl: float,
     spy_chg_pct: float,
-    vix: float,
+    vix: float | None,
 ) -> bool:
     ts = now_et().strftime("%H:%M:%S ET")
+    vix_display = f"{vix:.1f}" if vix is not None else "N/A"
     text = (
         f"<b>⚡ SETUP FORMING</b>\n"
         f"{ticker} | ${price:.2f} | {ts}\n"
         f"VWAP: ${vwap:.2f} | Touch #{touch_count}\n"
         f"RSI: {rsi:.1f} ↑ | ATR: ${atr:.2f}\n"
         f"Est. SL: ${sl:.2f}\n"
-        f"SPY: {spy_chg_pct:+.2f}% | VIX: {vix:.1f}"
+        f"SPY: {spy_chg_pct:+.2f}% | VIX: {vix_display}"
     )
     sent = _send(text)
     if sent:
