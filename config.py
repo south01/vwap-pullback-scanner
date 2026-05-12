@@ -38,3 +38,6 @@ REQUEST_DELAY_SEC  = float(os.environ.get("REQUEST_DELAY_SEC", 0.2))
 
 # Watchlist path (relative to repo root)
 WATCHLIST_PATH = os.environ.get("WATCHLIST_PATH", "watchlist.txt")
+
+# Dashboard
+DASHBOARD_TOKEN = os.environ["DASHBOARD_TOKEN"]
