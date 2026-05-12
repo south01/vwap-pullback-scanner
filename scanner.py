@@ -172,7 +172,10 @@ def process_ticker(
 
     if in_zone_now and not ticker_state.in_touch_zone:
         ticker_state.new_touch()
-        log.info("%s | Entered touch zone — touch #%d", ticker, ticker_state.vwap_touch_count)
+        touch_time = now_et().strftime("%H:%M:%S")
+        log.info("%s | TOUCH #%d @ $%.2f at %s ET",
+                 ticker, ticker_state.vwap_touch_count, current_price, touch_time)
+        state.record_touch(ticker, ticker_state.vwap_touch_count, touch_time, current_price)
     elif not in_zone_now and ticker_state.in_touch_zone:
         ticker_state.in_touch_zone = False
         log.info("%s | Exited touch zone", ticker)

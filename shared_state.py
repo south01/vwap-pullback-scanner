@@ -48,6 +48,9 @@ class SharedState:
         # Per-ticker data updated after every scan
         self.ticker_status: dict[str, TickerSnapshot] = {}
 
+        # Touch history: ticker -> [{touch#, time, price}, ...]
+        self.touch_history: dict[str, list[dict]] = {}
+
         # Macro
         self.spy_chg: float = 0.0
         self.vix: float = 0.0
@@ -71,6 +74,14 @@ class SharedState:
     def update_ticker(self, ticker: str, snap: TickerSnapshot) -> None:
         with self._lock:
             self.ticker_status[ticker] = snap
+
+    def record_touch(self, ticker: str, touch_num: int, time: str, price: float) -> None:
+        with self._lock:
+            self.touch_history.setdefault(ticker, []).append({
+                "num": touch_num,
+                "time": time,
+                "price": price,
+            })
 
     def record_alert(self, rec: AlertRecord) -> None:
         with self._lock:
@@ -101,6 +112,7 @@ class SharedState:
             self.tier2_count = 0
             self.scan_count = 0
             self.last_scan_time = "—"
+            self.touch_history = {}
             for snap in self.ticker_status.values():
                 snap.tier1_fired = False
                 snap.tier2_fired = False
@@ -123,7 +135,8 @@ class SharedState:
                 "ticker_status": {k: vars(v) for k, v in self.ticker_status.items()},
                 "spy_chg":       self.spy_chg,
                 "vix":           self.vix,
-                "alerts_today":  [vars(a) for a in self.alerts_today],
+                "touch_history":  dict(self.touch_history),
+            "alerts_today":  [vars(a) for a in self.alerts_today],
                 "tier1_count":   self.tier1_count,
                 "tier2_count":   self.tier2_count,
             }

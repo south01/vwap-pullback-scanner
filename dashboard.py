@@ -99,6 +99,33 @@ tr:hover td { background: #161b22; }
 .alert-row td { border-bottom: 1px solid #1c2128; }
 .refresh { font-size: 11px; color: #6e7681; text-align: right;
            padding: 8px 24px; }
+.touch-btn {
+  color: #79c0ff; cursor: pointer; border-bottom: 1px dashed #79c0ff;
+  font-weight: bold;
+}
+.touch-btn:hover { color: #fff; }
+
+/* Modal */
+#touch-modal {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.7); z-index: 100;
+  align-items: center; justify-content: center;
+}
+#touch-modal.open { display: flex; }
+#touch-box {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 20px 24px; min-width: 280px; max-width: 360px;
+}
+#touch-box h3 { color: #f0f6fc; font-size: 13px; margin-bottom: 12px; }
+#touch-box table { width: 100%; }
+#touch-box th { color: #8b949e; font-size: 11px; padding: 4px 8px; text-align: left; }
+#touch-box td { padding: 5px 8px; border-bottom: 1px solid #21262d; }
+#touch-close {
+  margin-top: 14px; float: right; background: #21262d; border: none;
+  color: #c9d1d9; padding: 4px 14px; border-radius: 4px; cursor: pointer;
+  font-family: inherit; font-size: 12px;
+}
+#touch-close:hover { background: #30363d; }
 """
 
 
@@ -129,15 +156,21 @@ def _vix_fmt(vix: float) -> str:
     return f'<span class="{cls}">VIX {vix:.1f}</span>'
 
 
+def _touch_popup_data(ticker: str, history: list[dict]) -> str:
+    """Encode touch history as a JSON-safe data attribute string."""
+    import json
+    return json.dumps(history)
+
+
 def _ticker_rows(s: dict) -> str:
     rows = []
     for ticker in s["tickers"]:
-        snap = s["ticker_status"].get(ticker, {})
-        conds = snap.get("conditions", {})
-        price = snap.get("price", 0.0)
-        vwap  = snap.get("vwap", 0.0)
-        delta = price - vwap if price and vwap else 0.0
-        delta_cls = "pass" if delta >= 0 else "fail"
+        snap    = s["ticker_status"].get(ticker, {})
+        conds   = snap.get("conditions", {})
+        price   = snap.get("price", 0.0)
+        vwap    = snap.get("vwap", 0.0)
+        delta   = price - vwap if price and vwap else 0.0
+        delta_cls  = "pass" if delta >= 0 else "fail"
         delta_sign = "+" if delta >= 0 else ""
 
         t1_cell = '<span class="t1">T1</span>' if snap.get("tier1_fired") else '<span class="dim">—</span>'
@@ -147,6 +180,22 @@ def _ticker_rows(s: dict) -> str:
             f"<td>{_cond(conds.get(k))}</td>" for k in _COND_KEYS
         )
 
+        touch_count   = snap.get("touch_count", 0)
+        touch_history = s.get("touch_history", {}).get(ticker, [])
+
+        if touch_count > 0 and touch_history:
+            import json
+            data = json.dumps(touch_history).replace("'", "&#39;").replace('"', "&quot;")
+            touch_cell = (
+                f'<span class="touch-btn" '
+                f'data-ticker="{ticker}" data-touches="{data}" '
+                f'onclick="showTouches(this)" '
+                f'title="Click to see touch history">'
+                f'{touch_count}</span>'
+            )
+        else:
+            touch_cell = f'<span class="dim">{touch_count}</span>'
+
         rows.append(f"""
         <tr>
           <td class="ticker">{ticker}</td>
@@ -155,7 +204,7 @@ def _ticker_rows(s: dict) -> str:
           <td class="{delta_cls}">{delta_sign}{delta:.2f}</td>
           <td>{snap.get('rsi', 0.0):.1f}</td>
           <td>${snap.get('atr', 0.0):.2f}</td>
-          <td class="dim">{snap.get('touch_count', 0)}</td>
+          <td>{touch_cell}</td>
           {cond_cells}
           <td>{t1_cell}</td>
           <td>{t2_cell}</td>
@@ -251,6 +300,43 @@ def _render_dashboard() -> str:
 
 <p class="refresh">Auto-refreshes every 30 s &nbsp;|&nbsp;
   <a href="/api/state">Raw JSON</a></p>
+
+<!-- Touch history modal -->
+<div id="touch-modal" onclick="if(event.target===this)closeTouches()">
+  <div id="touch-box">
+    <h3 id="touch-title">Touch History</h3>
+    <table>
+      <thead><tr><th>#</th><th>Time (ET)</th><th>Price</th></tr></thead>
+      <tbody id="touch-body"></tbody>
+    </table>
+    <button id="touch-close" onclick="closeTouches()">Close</button>
+  </div>
+</div>
+
+<script>
+function showTouches(el) {{
+  var ticker  = el.dataset.ticker;
+  var touches = JSON.parse(el.dataset.touches.replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
+  document.getElementById('touch-title').textContent = ticker + ' — Touch History';
+  var body = document.getElementById('touch-body');
+  body.innerHTML = '';
+  touches.forEach(function(t) {{
+    var row = '<tr>'
+      + '<td style="color:#8b949e">#' + t.num + '</td>'
+      + '<td>' + t.time + '</td>'
+      + '<td style="color:#79c0ff">$' + t.price.toFixed(2) + '</td>'
+      + '</tr>';
+    body.innerHTML += row;
+  }});
+  document.getElementById('touch-modal').classList.add('open');
+}}
+function closeTouches() {{
+  document.getElementById('touch-modal').classList.remove('open');
+}}
+document.addEventListener('keydown', function(e) {{
+  if (e.key === 'Escape') closeTouches();
+}});
+</script>
 
 </body>
 </html>"""
