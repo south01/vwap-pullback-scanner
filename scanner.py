@@ -135,27 +135,27 @@ def process_ticker(
     alert_counts: dict[str, dict],
     spy_chg: float,
 ) -> None:
-    # --- Real-time price + VWAP from snapshot (no delay) ---
-    snap = fetch_snapshot(ticker)
-    pv   = _price_and_vwap_from_snapshot(snap) if snap else None
-    if pv is None:
-        log.info("%s | Snapshot unavailable", ticker)
-        return
-    current_price, vwap = pv
-
-    # --- Bars for ATR + RSI (may be delayed up to ~2 h on this API tier) ---
-    raw_bars  = fetch_bars(ticker, timespan="minute", multiplier=5)
-    # Use all returned bars (pre-market included) for indicator computation;
-    # the aggregate endpoint has a delay so we can't filter to session only.
+    # --- Bars first: current price comes from the latest bar's vw field ---
+    # Snapshot prices can lag 1–3 polling cycles; bar vw is updated each poll.
+    raw_bars       = fetch_bars(ticker, timespan="minute", multiplier=5)
     indicator_bars = raw_bars if raw_bars else []
 
     if len(indicator_bars) < 3:
         log.info("%s | Too few bars for indicators (%d) — skipping", ticker, len(indicator_bars))
         return
 
-    closed_bars = indicator_bars[:-1]
+    current_price = indicator_bars[-1]["vw"]   # Bug 1 fix: use bar vw, not snapshot
+    closed_bars   = indicator_bars[:-1]
     atr = compute_atr(closed_bars, config.ATR_PERIOD)
     rsi = compute_rsi(closed_bars, config.RSI_PERIOD)
+
+    # --- Snapshot for session VWAP only (day.vw is a session aggregate) ---
+    snap = fetch_snapshot(ticker)
+    pv   = _price_and_vwap_from_snapshot(snap) if snap else None
+    if pv is None:
+        log.info("%s | Snapshot unavailable — skipping", ticker)
+        return
+    _, vwap = pv   # discard snapshot price; keep session VWAP
 
     # Build a synthetic vwap_series aligned to closed_bars for C1
     # (all values = session VWAP from snapshot so trend check uses real VWAP)
@@ -165,7 +165,8 @@ def process_ticker(
         log.info("%s | ATR zero — skipping", ticker)
         return
 
-    in_zone_now = c2_in_touch_zone(current_price, vwap, atr)
+    recent_closes = [bar["c"] for bar in closed_bars[-2:]]
+    in_zone_now = c2_in_touch_zone(current_price, vwap, atr, recent_closes, ticker)
 
     if current_price > vwap and not in_zone_now:
         ticker_state.consecutive_above_vwap += 1
@@ -251,12 +252,24 @@ def process_tier2(
     if ticker_state.tier2_fired_for_touch:
         return
 
-    # Use snapshot for real-time price + VWAP
+    # Bars first: derive current price from latest bar's vw (avoids snapshot staleness)
+    bars_5m = fetch_bars(ticker, timespan="minute", multiplier=5)
+    if len(bars_5m) < 2:
+        return
+
+    current_price = bars_5m[-1]["vw"]   # Bug 1 fix: use bar vw, not snapshot
+    closed_5m     = bars_5m[:-1]
+
+    atr = compute_atr(closed_5m, config.ATR_PERIOD)
+    if atr == 0:
+        return
+
+    # Snapshot for session VWAP + 1-min bar high (for tier2 trigger)
     snap = fetch_snapshot(ticker)
     pv   = _price_and_vwap_from_snapshot(snap) if snap else None
     if pv is None:
         return
-    current_price, vwap = pv
+    _, vwap = pv   # discard snapshot price; keep session VWAP
 
     # Prior 1-min bar high from snapshot (min.h = high of the last complete minute bar)
     try:
@@ -264,19 +277,8 @@ def process_tier2(
     except (KeyError, TypeError):
         prior_bar_high = 0.0
 
-    # ATR from whatever bars are available
-    bars_5m   = fetch_bars(ticker, timespan="minute", multiplier=5)
-    closed_5m = bars_5m[:-1] if len(bars_5m) > 1 else bars_5m
-
-    if not closed_5m:
-        return
-
-    atr = compute_atr(closed_5m, config.ATR_PERIOD)
-
-    if atr == 0:
-        return
-
-    in_zone = c2_in_touch_zone(current_price, vwap, atr)
+    recent_closes = [bar["c"] for bar in closed_5m[-2:]]
+    in_zone = c2_in_touch_zone(current_price, vwap, atr, recent_closes, ticker)
 
     if ticker_state.last_1min_high > 0 and current_price > ticker_state.last_1min_high and in_zone:
         sl, tp1, tp2 = compute_targets(current_price, atr)

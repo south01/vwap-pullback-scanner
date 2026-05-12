@@ -4,6 +4,7 @@ All bar-based conditions operate on CLOSED bars only.
 """
 
 from __future__ import annotations
+import logging
 from typing import TYPE_CHECKING
 
 import config
@@ -11,6 +12,8 @@ from indicators import compute_rsi, rsi_series, volume_moving_avg
 
 if TYPE_CHECKING:
     from state import TickerState
+
+log = logging.getLogger("vwap_scanner")
 
 
 def c1_established_trend(bars: list[dict], vwap_series: list[float]) -> bool:
@@ -37,10 +40,29 @@ def c1_established_trend(bars: list[dict], vwap_series: list[float]) -> bool:
     return max_consecutive >= config.MIN_BARS_ABOVE_VWAP
 
 
-def c2_in_touch_zone(current_price: float, vwap: float, atr: float) -> bool:
-    """Price within ATR_TOUCH_MULTIPLIER * ATR above VWAP (approaching from above)."""
+def c2_in_touch_zone(
+    current_price: float,
+    vwap: float,
+    atr: float,
+    recent_closes: list[float],
+    ticker: str = "",
+) -> bool:
+    """
+    Price within ATR_TOUCH_MULTIPLIER * ATR of VWAP, approaching from above.
+    recent_closes: last 2 closed bar closes (oldest first). At least one must
+    be above VWAP, confirming price is pulling back down rather than grinding up.
+    """
     zone = config.ATR_TOUCH_MULTIPLIER * atr
-    return vwap <= current_price <= vwap + zone
+    zone_low  = vwap - zone
+    zone_high = vwap + zone
+    in_zone = zone_low <= current_price <= zone_high
+    if not in_zone:
+        return False
+    approaching_from_above = any(c > vwap for c in recent_closes[-2:])
+    if not approaching_from_above:
+        log.info("[%s] C2 REJECTED — in zone but approaching from below", ticker)
+        return False
+    return True
 
 
 def c3_touch_count_valid(state: "TickerState") -> bool:
@@ -120,9 +142,10 @@ def evaluate_tier1(
     Evaluate all Tier 1 conditions (C1–C5, C7, C8).
     Returns (all_pass, per_condition_results).
     """
+    recent_closes = [bar["c"] for bar in bars[-2:]]
     results = {
         "C1": c1_established_trend(bars, vwap_series),
-        "C2": c2_in_touch_zone(current_price, vwap, atr),
+        "C2": c2_in_touch_zone(current_price, vwap, atr, recent_closes, state.ticker),
         "C3": c3_touch_count_valid(state),
         "C4": c4_volume_drying_up(bars),
         "C5": c5_rsi_in_zone_and_rising(bars),
