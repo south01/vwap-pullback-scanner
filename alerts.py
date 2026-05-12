@@ -8,6 +8,7 @@ import time
 import requests
 
 import config
+from utils import now_et
 
 log = logging.getLogger("vwap_scanner")
 
@@ -53,9 +54,10 @@ def send_tier1(
     spy_chg_pct: float,
     vix: float,
 ) -> bool:
+    ts = now_et().strftime("%H:%M:%S ET")
     text = (
         f"<b>⚡ SETUP FORMING</b>\n"
-        f"{ticker} | ${price:.2f}\n"
+        f"{ticker} | ${price:.2f} | {ts}\n"
         f"VWAP: ${vwap:.2f} | Touch #{touch_count}\n"
         f"RSI: {rsi:.1f} ↑ | ATR: ${atr:.2f}\n"
         f"Est. SL: ${sl:.2f}\n"
@@ -78,10 +80,11 @@ def send_tier2(
     r1: float,
     r2: float,
 ) -> bool:
+    ts = now_et().strftime("%H:%M:%S ET")
     risk = price - sl
     text = (
         f"<b>🟢 ENTRY SIGNAL</b>\n"
-        f"{ticker} | ${price:.2f}\n"
+        f"{ticker} | ${price:.2f} | {ts}\n"
         f"SL:  ${sl:.2f}\n"
         f"TP1: ${tp1:.2f} (+{r1:.1f}R)\n"
         f"TP2: ${tp2:.2f} (+{r2:.1f}R)\n"
@@ -94,8 +97,9 @@ def send_tier2(
 
 
 def send_grind_warning(ticker: str, n_bars: int) -> bool:
+    ts = now_et().strftime("%H:%M:%S ET")
     text = (
-        f"<b>⚠️ VWAP GRIND — {ticker}</b>\n"
+        f"<b>⚠️ VWAP GRIND — {ticker}</b> | {ts}\n"
         f"Stuck near VWAP for {n_bars} bars\n"
         f"Consider exiting flat — momentum stalled"
     )

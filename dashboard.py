@@ -53,6 +53,31 @@ def create_app() -> Flask:
 
 _COND_KEYS = ["C1", "C2", "C3", "C4", "C5", "C7", "C8"]
 
+_COND_DESC = {
+    "C1": ("Established Uptrend",
+           f"At least {config.MIN_BARS_ABOVE_VWAP} consecutive closed 5-min bars "
+           f"with close above VWAP earlier in the session (excluding the current bar). "
+           f"Confirms the stock was in a sustained uptrend before pulling back."),
+    "C2": ("In VWAP Touch Zone",
+           f"Current price is within {config.ATR_TOUCH_MULTIPLIER}× ATR above VWAP. "
+           f"Price is approaching VWAP from above — the pullback is entering the setup zone."),
+    "C3": ("Touch Count Valid",
+           f"The number of VWAP touches today has not exceeded the max of {config.MAX_VWAP_TOUCHES}. "
+           f"Too many touches indicate a choppy, indecisive tape."),
+    "C4": ("Volume Drying Up",
+           f"The prior 2 closed bars both have volume below the {config.VOLUME_AVG_PERIOD}-bar rolling average. "
+           f"Low-volume pullback suggests sellers are not committing — healthy consolidation."),
+    "C5": ("RSI Rising in Zone",
+           f"RSI ({config.RSI_PERIOD}-period) is between {config.RSI_MIN} and {config.RSI_MAX} AND "
+           f"higher than one bar ago. Momentum is pulling back but not oversold, and is starting to turn up."),
+    "C7": ("SPY Green (disabled)",
+           "SPY current price ≥ previous close — broad market is in a positive tone. "
+           "Currently disabled; always passes."),
+    "C8": ("VIX Below Threshold (disabled)",
+           f"VIX is below {config.VIX_MAX} — market fear is contained. "
+           f"Currently disabled; always passes."),
+}
+
 _CSS = """
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
@@ -126,6 +151,30 @@ tr:hover td { background: #161b22; }
   font-family: inherit; font-size: 12px;
 }
 #touch-close:hover { background: #30363d; }
+
+/* Condition explanation modal */
+.cond-hdr {
+  cursor: pointer; border-bottom: 1px dashed #8b949e;
+}
+.cond-hdr:hover { color: #f0f6fc; }
+#cond-modal {
+  display: none; position: fixed; inset: 0;
+  background: rgba(0,0,0,0.7); z-index: 100;
+  align-items: center; justify-content: center;
+}
+#cond-modal.open { display: flex; }
+#cond-box {
+  background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+  padding: 20px 24px; min-width: 300px; max-width: 420px;
+}
+#cond-box h3 { color: #f0f6fc; font-size: 13px; margin-bottom: 6px; }
+#cond-box p  { color: #c9d1d9; font-size: 12px; line-height: 1.6; margin-top: 8px; }
+#cond-close {
+  margin-top: 14px; float: right; background: #21262d; border: none;
+  color: #c9d1d9; padding: 4px 14px; border-radius: 4px; cursor: pointer;
+  font-family: inherit; font-size: 12px;
+}
+#cond-close:hover { background: #30363d; }
 """
 
 
@@ -232,15 +281,20 @@ def _alert_rows(alerts: list) -> str:
 
 
 def _render_dashboard() -> str:
+    import json
     s = state.snapshot()
     badge = _badge(s)
     spy   = _spy_fmt(s["spy_chg"])
     vix   = _vix_fmt(s["vix"])
+    cond_json = json.dumps({k: list(v) for k, v in _COND_DESC.items()})
 
     ticker_rows = _ticker_rows(s)
     alert_rows  = _alert_rows(s["alerts_today"])
 
-    cond_headers = "".join(f"<th>{k}</th>" for k in _COND_KEYS)
+    cond_headers = "".join(
+        f'<th><span class="cond-hdr" onclick="showCond(\'{k}\')" title="Click for details">{k}</span></th>'
+        for k in _COND_KEYS
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -301,6 +355,15 @@ def _render_dashboard() -> str:
 <p class="refresh">Auto-refreshes every 30 s &nbsp;|&nbsp;
   <a href="/api/state">Raw JSON</a></p>
 
+<!-- Condition explanation modal -->
+<div id="cond-modal" onclick="if(event.target===this)closeCond()">
+  <div id="cond-box">
+    <h3 id="cond-title"></h3>
+    <p id="cond-desc"></p>
+    <button id="cond-close" onclick="closeCond()">Close</button>
+  </div>
+</div>
+
 <!-- Touch history modal -->
 <div id="touch-modal" onclick="if(event.target===this)closeTouches()">
   <div id="touch-box">
@@ -314,6 +377,19 @@ def _render_dashboard() -> str:
 </div>
 
 <script>
+var COND_INFO = {cond_json};
+
+function showCond(key) {{
+  var info = COND_INFO[key];
+  if (!info) return;
+  document.getElementById('cond-title').textContent = key + ' — ' + info[0];
+  document.getElementById('cond-desc').textContent  = info[1];
+  document.getElementById('cond-modal').classList.add('open');
+}}
+function closeCond() {{
+  document.getElementById('cond-modal').classList.remove('open');
+}}
+
 function showTouches(el) {{
   var ticker  = el.dataset.ticker;
   var touches = JSON.parse(el.dataset.touches.replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
@@ -334,7 +410,7 @@ function closeTouches() {{
   document.getElementById('touch-modal').classList.remove('open');
 }}
 document.addEventListener('keydown', function(e) {{
-  if (e.key === 'Escape') closeTouches();
+  if (e.key === 'Escape') {{ closeTouches(); closeCond(); }}
 }});
 </script>
 
