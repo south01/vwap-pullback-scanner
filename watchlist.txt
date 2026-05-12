@@ -1,0 +1,14 @@
+# VWAP Pullback Scanner — Watchlist
+# One ticker per line. Lines starting with # are ignored.
+# Edit this file to match your trading universe.
+
+AAPL
+MSFT
+NVDA
+META
+GOOGL
+AMZN
+TSLA
+AMD
+SPY
+QQQ
