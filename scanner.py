@@ -114,6 +114,19 @@ def _build_vwap_series(bars: list[dict]) -> list[float]:
     return series
 
 
+def _price_and_vwap_from_snapshot(snap: dict) -> tuple[float, float] | None:
+    """Extract real-time current price and session VWAP from a snapshot response."""
+    try:
+        t   = snap["ticker"]
+        # day.vw is the session VWAP (volume-weighted, from market open)
+        # min.c is the most recent 1-minute bar close = current price
+        price = t["min"]["c"]
+        vwap  = t["day"]["vw"]
+        return float(price), float(vwap)
+    except (KeyError, TypeError):
+        return None
+
+
 def process_ticker(
     ticker: str,
     ticker_state: TickerState,
@@ -122,25 +135,34 @@ def process_ticker(
     alert_counts: dict[str, dict],
     spy_chg: float,
 ) -> None:
-    raw_bars = fetch_bars(ticker, timespan="minute", multiplier=5)
-    if not raw_bars:
-        log.info("%s | No bars returned", ticker)
+    # --- Real-time price + VWAP from snapshot (no delay) ---
+    snap = fetch_snapshot(ticker)
+    pv   = _price_and_vwap_from_snapshot(snap) if snap else None
+    if pv is None:
+        log.info("%s | Snapshot unavailable", ticker)
+        return
+    current_price, vwap = pv
+
+    # --- Bars for ATR + RSI (may be delayed up to ~2 h on this API tier) ---
+    raw_bars  = fetch_bars(ticker, timespan="minute", multiplier=5)
+    # Use all returned bars (pre-market included) for indicator computation;
+    # the aggregate endpoint has a delay so we can't filter to session only.
+    indicator_bars = raw_bars if raw_bars else []
+
+    if len(indicator_bars) < 3:
+        log.info("%s | Too few bars for indicators (%d) — skipping", ticker, len(indicator_bars))
         return
 
-    bars = session_bars(raw_bars)
-    if len(bars) < 3:
-        log.info("%s | Too few session bars (%d)", ticker, len(bars))
-        return
+    closed_bars = indicator_bars[:-1]
+    atr = compute_atr(closed_bars, config.ATR_PERIOD)
+    rsi = compute_rsi(closed_bars, config.RSI_PERIOD)
 
-    closed_bars  = bars[:-1]
-    vwap_series  = _build_vwap_series(closed_bars)
-    vwap         = vwap_series[-1] if vwap_series else 0.0
-    atr          = compute_atr(closed_bars, config.ATR_PERIOD)
-    rsi          = compute_rsi(closed_bars, config.RSI_PERIOD)
-    current_price = bars[-1]["c"]
+    # Build a synthetic vwap_series aligned to closed_bars for C1
+    # (all values = session VWAP from snapshot so trend check uses real VWAP)
+    vwap_series = [vwap] * len(closed_bars)
 
-    if vwap == 0 or atr == 0:
-        log.info("%s | VWAP or ATR zero — skipping", ticker)
+    if atr == 0:
+        log.info("%s | ATR zero — skipping", ticker)
         return
 
     in_zone_now = c2_in_touch_zone(current_price, vwap, atr)
@@ -226,28 +248,29 @@ def process_tier2(
     if ticker_state.tier2_fired_for_touch:
         return
 
-    bars_1m = fetch_bars(ticker, timespan="minute", multiplier=1)
-    if not bars_1m:
+    # Use snapshot for real-time price + VWAP
+    snap = fetch_snapshot(ticker)
+    pv   = _price_and_vwap_from_snapshot(snap) if snap else None
+    if pv is None:
         return
+    current_price, vwap = pv
 
-    sess_1m = session_bars(bars_1m)
-    if len(sess_1m) < 2:
-        return
+    # Prior 1-min bar high from snapshot (min.h = high of the last complete minute bar)
+    try:
+        prior_bar_high = float(snap["ticker"]["min"]["h"])
+    except (KeyError, TypeError):
+        prior_bar_high = 0.0
 
-    current_price  = sess_1m[-1]["c"]
-    prior_bar_high = sess_1m[-2]["h"]
-
+    # ATR from whatever bars are available
     bars_5m   = fetch_bars(ticker, timespan="minute", multiplier=5)
-    sess_5m   = session_bars(bars_5m)
-    closed_5m = sess_5m[:-1] if len(sess_5m) > 1 else sess_5m
+    closed_5m = bars_5m[:-1] if len(bars_5m) > 1 else bars_5m
 
     if not closed_5m:
         return
 
-    vwap = compute_vwap(closed_5m)
-    atr  = compute_atr(closed_5m, config.ATR_PERIOD)
+    atr = compute_atr(closed_5m, config.ATR_PERIOD)
 
-    if vwap == 0 or atr == 0:
+    if atr == 0:
         return
 
     in_zone = c2_in_touch_zone(current_price, vwap, atr)
