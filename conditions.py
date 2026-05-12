@@ -126,7 +126,7 @@ def evaluate_tier1(
         "C3": c3_touch_count_valid(state),
         "C4": c4_volume_drying_up(bars),
         "C5": c5_rsi_in_zone_and_rising(bars),
-        "C7": c7_spy_green(spy_snapshot),
-        "C8": c8_vix_below_threshold(vix_value),
+        "C7": True,  # SPY check disabled
+        "C8": True,  # VIX check disabled
     }
     return all(results.values()), results
