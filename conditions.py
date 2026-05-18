@@ -49,8 +49,7 @@ def c2_in_touch_zone(
 ) -> bool:
     """
     Price within ATR_TOUCH_MULTIPLIER * ATR of VWAP, approaching from above.
-    recent_closes: last 2 closed bar closes (oldest first). At least one must
-    be above VWAP, confirming price is pulling back down rather than grinding up.
+    recent_closes: last 2 closed bar closes (oldest first).
     """
     zone = config.ATR_TOUCH_MULTIPLIER * atr
     zone_low  = vwap - zone
@@ -58,9 +57,12 @@ def c2_in_touch_zone(
     in_zone = zone_low <= current_price <= zone_high
     if not in_zone:
         return False
-    approaching_from_above = any(c > vwap for c in recent_closes[-2:])
-    if not approaching_from_above:
-        log.info("[%s] C2 REJECTED — in zone but approaching from below", ticker)
+
+    is_sloping_down = recent_closes[-2] > recent_closes[-1]
+    is_above_vwap = recent_closes[-1] >= vwap
+
+    if not (is_sloping_down and is_above_vwap):
+        log.info("[%s] C2 REJECTED — in zone but not a clean downward pullback from above", ticker)
         return False
     return True
 
@@ -76,12 +78,11 @@ def c4_volume_drying_up(bars: list[dict], avg_period: int = None) -> bool:
     Requires at least avg_period + 2 bars for a meaningful average.
     """
     period = avg_period if avg_period is not None else config.VOLUME_AVG_PERIOD
-    if len(bars) < 3:
+    if len(bars) < period + 1:
         return False
 
     vol_avg = volume_moving_avg(bars, period)
-    # Check the two bars immediately before the current (last) bar
-    for idx in [-3, -2]:
+    for idx in [-2, -1]:
         if bars[idx]["v"] >= vol_avg[idx]:
             return False
     return True
