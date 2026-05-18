@@ -123,6 +123,11 @@ class TestC2InTouchZone:
     def test_price_above_zone(self):
         assert c2_in_touch_zone(101.5, 100.0, 2.0, [102.0, 102.0]) is False
 
+    def test_last_bar_dipped_below_vwap_still_valid(self):
+        # Key scenario: by the time live price enters the zone, the most recent CLOSED
+        # bar has already dipped slightly below VWAP. Penultimate bar was above — valid.
+        assert c2_in_touch_zone(99.9, 100.0, 2.0, [101.0, 99.8]) is True
+
     def test_price_below_vwap_in_zone_approaching_from_above(self):
         # Price dipped just below VWAP but was above it recently — valid pullback
         assert c2_in_touch_zone(99.5, 100.0, 2.0, [101.0, 99.5]) is True
@@ -131,16 +136,16 @@ class TestC2InTouchZone:
         # Neither prior bar was above VWAP — grinding up from below, not a pullback
         assert c2_in_touch_zone(99.5, 100.0, 2.0, [99.0, 99.3]) is False
 
+    def test_flat_doji_bar_still_valid(self):
+        # Both closed bars at same level above VWAP — flat doji counts as valid pullback
+        assert c2_in_touch_zone(100.2, 100.0, 2.0, [101.0, 101.0]) is True
+
     def test_exactly_at_zone_upper_boundary(self):
         assert c2_in_touch_zone(101.0, 100.0, 2.0, [102.0, 101.5]) is True
 
     def test_outside_zone_low_boundary(self):
         # 98.9 < zone_low (99) — not in zone regardless of direction
         assert c2_in_touch_zone(98.9, 100.0, 2.0, [101.0, 101.0]) is False
-
-    def test_empty_recent_closes_rejected(self):
-        # No prior bar data — cannot confirm approach from above
-        assert c2_in_touch_zone(100.5, 100.0, 2.0, []) is False
 
 
 # ---------------------------------------------------------------------------

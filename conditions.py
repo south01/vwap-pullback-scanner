@@ -58,10 +58,12 @@ def c2_in_touch_zone(
     if not in_zone:
         return False
 
-    is_sloping_down = recent_closes[-2] > recent_closes[-1]
-    is_above_vwap = recent_closes[-1] >= vwap
+    # The bar *before* the pullback bar must have closed above VWAP — confirms approach
+    # from above even when the most recent closed bar has already dipped to/below VWAP.
+    was_above_vwap = recent_closes[-2] >= vwap
+    declining = recent_closes[-2] >= recent_closes[-1]  # >= allows flat doji
 
-    if not (is_sloping_down and is_above_vwap):
+    if not (was_above_vwap and declining):
         log.info("[%s] C2 REJECTED — in zone but not a clean downward pullback from above", ticker)
         return False
     return True
