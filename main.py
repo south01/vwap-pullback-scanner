@@ -21,7 +21,9 @@ def main() -> None:
 
     from scanner import Scanner
     from telegram_cmd import TelegramCommandHandler
-    from dashboard import create_app
+    from dashboard import create_app, set_reflexivity_engine
+    from reflexivity.engine import ReflexivityEngine
+    from reflexivity.scheduler import start_reflexivity_scheduler
 
     scanner = Scanner()
     scanner.setup()
@@ -44,6 +46,12 @@ def main() -> None:
     cmd_handler = TelegramCommandHandler(scanner)
     cmd_thread = threading.Thread(target=cmd_handler.run, name="telegram-cmd", daemon=True)
     cmd_thread.start()
+
+    # --- Reflexivity Engine ---
+    reflexivity_engine = ReflexivityEngine(config=None)
+    set_reflexivity_engine(reflexivity_engine)
+    start_reflexivity_scheduler(reflexivity_engine, None)
+    log.info("Reflexivity Engine started")
 
     # --- Flask dashboard (main thread) ---
     app  = create_app()

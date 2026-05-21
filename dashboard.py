@@ -3,15 +3,25 @@ Minimal Flask monitoring dashboard — single-page, token-protected.
 Access: https://<your-railway-domain>/?token=<DASHBOARD_TOKEN>
 """
 
+import json
 import os
+import time
 from functools import wraps
 
-from flask import Flask, Response, jsonify, request, session
+from flask import Flask, Response, jsonify, request, session, stream_with_context
 
 import config
 from shared_state import state
 
 _TOKEN = config.DASHBOARD_TOKEN
+
+# Injected by main.py after engine is created
+_reflexivity_engine = None
+
+
+def set_reflexivity_engine(engine) -> None:
+    global _reflexivity_engine
+    _reflexivity_engine = engine
 
 
 def _check_token(f):
@@ -43,6 +53,61 @@ def create_app() -> Flask:
     @app.route("/api/health")
     def health():
         return jsonify({"ok": True})
+
+    # ------------------------------------------------------------------
+    # Reflexivity / Loop Radar routes
+    # ------------------------------------------------------------------
+
+    @app.route("/loop-radar")
+    @_check_token
+    def loop_radar():
+        return _render_loop_radar()
+
+    @app.route("/api/reflexivity/scores")
+    @_check_token
+    def reflexivity_scores():
+        if _reflexivity_engine is None:
+            return jsonify({"ok": False, "error": "engine not initialised"}), 503
+        return jsonify({
+            "ok":       True,
+            "last_run": _reflexivity_engine.last_run(),
+            "scores":   _reflexivity_engine.latest(),
+        })
+
+    @app.route("/api/reflexivity/ticker/<symbol>")
+    @_check_token
+    def reflexivity_ticker(symbol: str):
+        if _reflexivity_engine is None:
+            return jsonify({"ok": False, "error": "engine not initialised"}), 503
+        detail = _reflexivity_engine.get_ticker_detail(symbol.upper())
+        if detail is None:
+            return jsonify({"ok": False, "error": "no data yet"}), 404
+        return jsonify({"ok": True, **detail})
+
+    @app.route("/api/reflexivity/stream")
+    @_check_token
+    def reflexivity_stream():
+        """SSE endpoint — pushes updated scores every 10 s."""
+        if _reflexivity_engine is None:
+            return Response("data: {}\n\n", mimetype="text/event-stream")
+
+        def _generate():
+            while True:
+                payload = json.dumps({
+                    "last_run": _reflexivity_engine.last_run(),
+                    "scores":   _reflexivity_engine.latest(),
+                })
+                yield f"data: {payload}\n\n"
+                time.sleep(10)
+
+        return Response(
+            stream_with_context(_generate()),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control":   "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
 
     return app
 
@@ -412,6 +477,240 @@ function closeTouches() {{
 document.addEventListener('keydown', function(e) {{
   if (e.key === 'Escape') {{ closeTouches(); closeCond(); }}
 }});
+</script>
+
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
+# Loop Radar renderer
+# ---------------------------------------------------------------------------
+
+_LOOP_CSS = """
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #0d1117; color: #c9d1d9;
+  font-family: 'Courier New', monospace; font-size: 13px;
+}
+a { color: #58a6ff; text-decoration: none; }
+header {
+  background: #161b22; border-bottom: 1px solid #30363d;
+  padding: 14px 24px; display: flex; align-items: center; gap: 16px;
+}
+header h1 { font-size: 16px; color: #f0f6fc; letter-spacing: 1px; }
+.meta { color: #8b949e; font-size: 12px; margin-left: auto; }
+section { padding: 20px 24px; }
+h2 { color: #8b949e; font-size: 11px; letter-spacing: 1px;
+     text-transform: uppercase; margin-bottom: 12px; }
+table { width: 100%; border-collapse: collapse; }
+th {
+  text-align: left; padding: 6px 10px;
+  color: #8b949e; font-size: 11px; letter-spacing: 1px;
+  border-bottom: 1px solid #21262d; white-space: nowrap;
+}
+td { padding: 7px 10px; border-bottom: 1px solid #161b22; white-space: nowrap; }
+tr:hover td { background: #161b22; }
+.ticker { color: #f0f6fc; font-weight: bold; }
+.dim    { color: #8b949e; }
+.score-bar {
+  display: inline-block; height: 8px; border-radius: 4px;
+  vertical-align: middle; margin-right: 6px;
+}
+.badge {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 11px; font-weight: bold; white-space: nowrap;
+}
+.cls-LOOP_ACTIVE  { background: #1a4a2e; color: #56d364; border: 1px solid #2ea043; }
+.cls-LOOP_FORMING { background: #4a3800; color: #e3b341; border: 1px solid #9e6a03; }
+.cls-LOOP_COOLING { background: #2d1f00; color: #d29922; border: 1px solid #6e4800; }
+.cls-NO_LOOP      { background: #21262d; color: #8b949e; border: 1px solid #30363d; }
+.exit-flag { color: #f85149; font-weight: bold; }
+.note { color: #c9d1d9; font-size: 11px; white-space: normal; max-width: 360px; }
+.refresh { font-size: 11px; color: #6e7681; text-align: right; padding: 8px 24px; }
+#live-badge {
+  font-size: 11px; padding: 2px 8px; border-radius: 10px;
+  background: #21262d; color: #8b949e; border: 1px solid #30363d;
+}
+#live-badge.connected { background: #1a4a2e; color: #56d364; border-color: #2ea043; }
+"""
+
+_CLS_LABELS = {
+    "LOOP_ACTIVE":  "LOOP ACTIVE",
+    "LOOP_FORMING": "FORMING",
+    "LOOP_COOLING": "COOLING",
+    "NO_LOOP":      "NO LOOP",
+}
+
+
+def _score_bar(val: float, color: str) -> str:
+    w = max(2, int(val))
+    return (
+        f'<span class="score-bar" '
+        f'style="width:{w}px;background:{color}" title="{val:.0f}"></span>'
+        f'<span style="color:{color}">{val:.0f}</span>'
+    )
+
+
+def _radar_rows(scores: list[dict]) -> str:
+    if not scores:
+        return '<tr><td colspan="9" class="dim" style="padding:12px">No data yet — engine not run or market closed</td></tr>'
+    rows = []
+    for r in scores:
+        cls      = r.get("classification", "NO_LOOP")
+        cls_html = f'<span class="badge cls-{cls}">{_CLS_LABELS.get(cls, cls)}</span>'
+        exit_html = '<span class="exit-flag">EXIT</span>' if r.get("exit_signal") else '<span class="dim">—</span>'
+        comp   = r.get("composite_score", 0)
+        # Bar colour by score level
+        if comp >= 72:   bar_col = "#56d364"
+        elif comp >= 55: bar_col = "#e3b341"
+        elif comp >= 38: bar_col = "#d29922"
+        else:            bar_col = "#484f58"
+
+        rows.append(f"""
+        <tr>
+          <td class="ticker"><a href="/api/reflexivity/ticker/{r['symbol']}?token=" style="color:#f0f6fc">{r['symbol']}</a></td>
+          <td>{_score_bar(comp, bar_col)}</td>
+          <td>{_score_bar(r.get('momentum_score', 0),  '#79c0ff')}</td>
+          <td>{_score_bar(r.get('volume_score', 0),    '#d2a8ff')}</td>
+          <td>{_score_bar(r.get('sentiment_score', 0), '#ffa657')}</td>
+          <td>{_score_bar(r.get('catalyst_score', 0),  '#ff7b72')}</td>
+          <td>{cls_html}</td>
+          <td>{exit_html}</td>
+          <td class="note">{r.get('strategy_note', '—')}</td>
+        </tr>""")
+    return "\n".join(rows)
+
+
+def _render_loop_radar() -> str:
+    scores   = _reflexivity_engine.latest() if _reflexivity_engine else []
+    last_run = _reflexivity_engine.last_run() if _reflexivity_engine else "—"
+    rows_html = _radar_rows(scores)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Loop Radar</title>
+  <style>{_LOOP_CSS}</style>
+</head>
+<body>
+
+<header>
+  <h1>🔄 Loop Radar</h1>
+  <span class="dim" style="font-size:12px">
+    Last scan: <b style="color:#c9d1d9" id="last-run">{last_run}</b>
+    &nbsp;|&nbsp; {len(scores)} tickers
+  </span>
+  <span class="meta">
+    <span id="live-badge">SSE OFF</span>
+    &nbsp;|&nbsp;
+    <a href="/">VWAP Scanner</a>
+  </span>
+</header>
+
+<section>
+  <h2>Reflexivity Scores</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Ticker</th>
+        <th>Composite</th>
+        <th title="Price momentum">M</th>
+        <th title="Volume acceleration">V</th>
+        <th title="Sentiment">S</th>
+        <th title="News catalyst">C</th>
+        <th>Classification</th>
+        <th>Exit?</th>
+        <th>Strategy Note</th>
+      </tr>
+    </thead>
+    <tbody id="scores-body">
+      {rows_html}
+    </tbody>
+  </table>
+</section>
+
+<p class="refresh" id="footer-ts">
+  Auto-refreshes via SSE &nbsp;|&nbsp;
+  <a href="/api/reflexivity/scores">Raw JSON</a>
+</p>
+
+<script>
+var TOKEN = (new URLSearchParams(window.location.search)).get('token') || '';
+
+function barHtml(val, color) {{
+  var w = Math.max(2, Math.round(val));
+  return '<span class="score-bar" style="width:' + w + 'px;background:' + color + '" title="' + val.toFixed(0) + '"></span>'
+       + '<span style="color:' + color + '">' + val.toFixed(0) + '</span>';
+}}
+
+var CLS_LABEL = {{
+  'LOOP_ACTIVE':  'LOOP ACTIVE',
+  'LOOP_FORMING': 'FORMING',
+  'LOOP_COOLING': 'COOLING',
+  'NO_LOOP':      'NO LOOP'
+}};
+
+function renderRows(scores) {{
+  if (!scores || scores.length === 0) {{
+    document.getElementById('scores-body').innerHTML =
+      '<tr><td colspan="9" class="dim" style="padding:12px">No data yet</td></tr>';
+    return;
+  }}
+  var html = '';
+  scores.forEach(function(r) {{
+    var comp = r.composite_score || 0;
+    var bc   = comp >= 72 ? '#56d364' : comp >= 55 ? '#e3b341' : comp >= 38 ? '#d29922' : '#484f58';
+    var cls  = r.classification || 'NO_LOOP';
+    var clsLabel = CLS_LABEL[cls] || cls;
+    var exitHtml = r.exit_signal
+      ? '<span class="exit-flag">EXIT</span>'
+      : '<span class="dim">—</span>';
+    html += '<tr>'
+      + '<td class="ticker">' + r.symbol + '</td>'
+      + '<td>' + barHtml(comp, bc) + '</td>'
+      + '<td>' + barHtml(r.momentum_score  || 0, '#79c0ff') + '</td>'
+      + '<td>' + barHtml(r.volume_score    || 0, '#d2a8ff') + '</td>'
+      + '<td>' + barHtml(r.sentiment_score || 0, '#ffa657') + '</td>'
+      + '<td>' + barHtml(r.catalyst_score  || 0, '#ff7b72') + '</td>'
+      + '<td><span class="badge cls-' + cls + '">' + clsLabel + '</span></td>'
+      + '<td>' + exitHtml + '</td>'
+      + '<td class="note">' + (r.strategy_note || '—') + '</td>'
+      + '</tr>';
+  }});
+  document.getElementById('scores-body').innerHTML = html;
+}}
+
+// SSE live updates
+function connectSSE() {{
+  var badge = document.getElementById('live-badge');
+  var url   = '/api/reflexivity/stream?token=' + TOKEN;
+  var es    = new EventSource(url);
+
+  es.onopen = function() {{
+    badge.textContent = 'LIVE';
+    badge.classList.add('connected');
+  }};
+
+  es.onmessage = function(e) {{
+    try {{
+      var data = JSON.parse(e.data);
+      if (data.scores) renderRows(data.scores);
+      if (data.last_run) document.getElementById('last-run').textContent = data.last_run;
+    }} catch(err) {{}}
+  }};
+
+  es.onerror = function() {{
+    badge.textContent = 'RECONNECTING';
+    badge.classList.remove('connected');
+    es.close();
+    setTimeout(connectSSE, 5000);
+  }};
+}}
+
+connectSSE();
 </script>
 
 </body>
