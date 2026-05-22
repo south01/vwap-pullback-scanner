@@ -48,7 +48,7 @@ def main() -> None:
     cmd_thread.start()
 
     # --- Reflexivity Engine ---
-    reflexivity_engine = ReflexivityEngine(config=None)
+    reflexivity_engine = ReflexivityEngine()
     set_reflexivity_engine(reflexivity_engine)
     start_reflexivity_scheduler(reflexivity_engine, None)
     log.info("Reflexivity Engine started")
