@@ -38,20 +38,20 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _shutdown)
     signal.signal(signal.SIGINT,  _shutdown)
 
+    # --- Reflexivity Engine (before cmd_handler so it can be passed in) ---
+    reflexivity_engine = ReflexivityEngine()
+    set_reflexivity_engine(reflexivity_engine)
+    start_reflexivity_scheduler(reflexivity_engine, None)
+    log.info("Reflexivity Engine started")
+
     # --- Scanner thread ---
     scan_thread = threading.Thread(target=scanner.run, name="scanner", daemon=True)
     scan_thread.start()
 
     # --- Telegram command thread ---
-    cmd_handler = TelegramCommandHandler(scanner)
+    cmd_handler = TelegramCommandHandler(scanner, reflexivity_engine)
     cmd_thread = threading.Thread(target=cmd_handler.run, name="telegram-cmd", daemon=True)
     cmd_thread.start()
-
-    # --- Reflexivity Engine ---
-    reflexivity_engine = ReflexivityEngine()
-    set_reflexivity_engine(reflexivity_engine)
-    start_reflexivity_scheduler(reflexivity_engine, None)
-    log.info("Reflexivity Engine started")
 
     # --- Flask dashboard (main thread) ---
     app  = create_app()
