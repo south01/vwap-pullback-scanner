@@ -53,9 +53,9 @@ def _compute(ticker: str, engine) -> float:
     except Exception:
         pass
 
-    # Scores: 3× = 100, 1× = 25
-    bar_s  = min(100.0, max(0.0, (rel_vol  - 1.0) * 37.5))
-    trend_s = min(100.0, max(0.0, (vol_trend - 0.5) / 1.5 * 100))
-    snap_s  = min(100.0, max(0.0, (snap_rvol - 1.0) * 37.5))
+    # Scores: 1× = 25, 3× = 100
+    bar_s   = min(100.0, max(0.0, (rel_vol   - 1.0) * 37.5 + 25))
+    trend_s = min(100.0, max(0.0, (vol_trend - 1.0) / 1.0 * 50 + 50))
+    snap_s  = min(100.0, max(0.0, (snap_rvol - 1.0) * 37.5 + 25))
 
     return round(bar_s * 0.40 + trend_s * 0.30 + snap_s * 0.30, 1)

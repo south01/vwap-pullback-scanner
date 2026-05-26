@@ -6,6 +6,9 @@ per-ticker sentiment insights. Falls back to price-change proxy.
 
 import logging
 from datetime import datetime, timedelta, timezone
+import pytz
+
+_ET = pytz.timezone("America/New_York")
 
 log = logging.getLogger("vwap_scanner")
 
@@ -25,7 +28,7 @@ def _compute(ticker: str, engine) -> float:
     since = (now - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     data = engine._fetch("/v2/reference/news", {
-        "ticker": ticker, "published_gte": since, "limit": 10, "order": "desc",
+        "ticker": ticker, "published_utc.gte": since, "limit": 10, "order": "desc",
     })
 
     if data and "results" in data:
@@ -48,7 +51,8 @@ def _from_news(articles: list, ticker: str, now) -> float:
         pub = articles[0].get("published_utc", "")
         if pub:
             pub_dt    = datetime.fromisoformat(pub.replace("Z", "+00:00"))
-            hours_ago = (now.replace(tzinfo=None) - pub_dt.replace(tzinfo=None)).total_seconds() / 3600
+            pub_et    = pub_dt.astimezone(_ET).replace(tzinfo=None)
+            hours_ago = (now.replace(tzinfo=None) - pub_et).total_seconds() / 3600
             recency_s = max(0.0, 100.0 - hours_ago * 5)
     except Exception:
         pass

@@ -46,7 +46,7 @@ def _compute(ticker: str, engine) -> float:
 
 def _news_count(ticker: str, engine, since: str) -> int | None:
     data = engine._fetch("/v2/reference/news", {
-        "ticker": ticker, "published_gte": since, "limit": 10,
+        "ticker": ticker, "published_utc.gte": since, "limit": 50,
     })
     if not data:
         return None
