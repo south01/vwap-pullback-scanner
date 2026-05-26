@@ -101,6 +101,10 @@ class SharedState:
             self.spy_chg = spy_chg
             self.vix = vix
 
+    def set_paused(self, val: bool) -> None:
+        with self._lock:
+            self.is_paused = val
+
     def set_market_open(self, val: bool) -> None:
         with self._lock:
             self.is_market_open = val

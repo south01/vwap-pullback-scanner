@@ -3,6 +3,8 @@
 import logging
 import time
 
+import threading
+
 import requests
 
 import config
@@ -14,6 +16,7 @@ _TELEGRAM_URL = f"https://api.telegram.org/bot{config.TELEGRAM_TOKEN}/sendMessag
 
 # Per-symbol last classification sent — avoid duplicate alerts
 _last_alert: dict[str, str] = {}
+_alert_lock = threading.Lock()
 
 
 def _send(text: str) -> bool:
@@ -34,14 +37,15 @@ def maybe_alert(result: dict) -> None:
     """Fire Telegram alert on state transitions worth knowing about."""
     symbol = result["symbol"]
     cls    = result["classification"]
-    prev   = _last_alert.get(symbol)
+
+    with _alert_lock:
+        prev = _last_alert.get(symbol)
+        _last_alert[symbol] = cls
 
     if cls == "LOOP_ACTIVE" and prev != "LOOP_ACTIVE":
         _send_loop_active(result)
     elif result["exit_signal"] and prev == "LOOP_ACTIVE":
         _send_loop_exit(result)
-
-    _last_alert[symbol] = cls
 
 
 def _send_loop_active(r: dict) -> None:

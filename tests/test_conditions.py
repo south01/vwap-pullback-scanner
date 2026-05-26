@@ -186,16 +186,16 @@ class TestC4VolumeDryingUp:
         return [_bar(100.0, v=v) for v in vols]
 
     def test_passes_when_prior_two_bars_low_volume(self):
-        # 20 bars of high volume to build avg, then 2 low-vol bars, then current bar
-        bars = self._make_bars([2_000_000] * 20 + [500_000, 500_000, 2_000_000])
+        # Pass closed bars only — same as production (scanner strips current bar before calling C4)
+        bars = self._make_bars([2_000_000] * 20 + [500_000, 500_000])
         assert c4_volume_drying_up(bars) is True
 
     def test_fails_when_only_one_bar_low_volume(self):
-        bars = self._make_bars([2_000_000] * 20 + [2_000_000, 500_000, 2_000_000])
+        bars = self._make_bars([2_000_000] * 20 + [2_000_000, 500_000])
         assert c4_volume_drying_up(bars) is False
 
     def test_fails_when_neither_bar_low_volume(self):
-        bars = self._make_bars([2_000_000] * 20 + [2_500_000, 2_500_000, 2_000_000])
+        bars = self._make_bars([2_000_000] * 20 + [2_500_000, 2_500_000])
         assert c4_volume_drying_up(bars) is False
 
     def test_fails_with_too_few_bars(self):

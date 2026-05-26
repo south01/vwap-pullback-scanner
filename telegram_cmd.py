@@ -125,7 +125,7 @@ class TelegramCommandHandler:
     # ------------------------------------------------------------------
 
     def _cmd_list(self) -> None:
-        tickers = self._scanner.watchlist
+        tickers = self._scanner.active_tickers
         if not tickers:
             self._send("No active tickers.")
             return
@@ -165,7 +165,7 @@ class TelegramCommandHandler:
         if state.is_paused:
             self._send("Already paused. Use /resume to restart scanning.")
             return
-        state.is_paused = True
+        state.set_paused(True)
         self._send("⏸ <b>Scanner paused.</b> Use /resume to restart.")
         log.info("CMD: scanner paused")
 
@@ -173,7 +173,7 @@ class TelegramCommandHandler:
         if not state.is_paused:
             self._send("Scanner is already running.")
             return
-        state.is_paused = False
+        state.set_paused(False)
         self._send("▶️ <b>Scanner resumed.</b>")
         log.info("CMD: scanner resumed")
 

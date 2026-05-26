@@ -1,8 +1,11 @@
 """SQLite schema and helpers for the Reflexivity Engine."""
 
+import logging
 import os
 import sqlite3
 from contextlib import contextmanager
+
+log = logging.getLogger("vwap_scanner")
 
 DB_PATH = os.environ.get("REFLEXIVITY_DB_PATH", "/tmp/reflexivity.db")
 
@@ -34,6 +37,12 @@ CREATE TABLE IF NOT EXISTS reflexivity_tickers (
 
 
 def init_db() -> None:
+    if DB_PATH.startswith("/tmp"):
+        log.warning(
+            "REFLEXIVITY_DB_PATH is under /tmp (%s) — data will be lost on restart. "
+            "Set REFLEXIVITY_DB_PATH to a persistent volume path (e.g. /data/reflexivity.db).",
+            DB_PATH,
+        )
     with _conn() as conn:
         conn.executescript(_SCHEMA)
 
@@ -108,6 +117,9 @@ def get_ticker_history(symbol: str, limit: int = 20) -> list[dict]:
 
 
 def set_tickers(symbols: list[str], source: str = "watchlist") -> None:
+    if not symbols:
+        log.warning("set_tickers called with empty list — skipping to avoid clearing DB")
+        return
     with _conn() as conn:
         conn.execute("DELETE FROM reflexivity_tickers")
         conn.executemany(

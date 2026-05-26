@@ -25,7 +25,7 @@ from conditions import c2_in_touch_zone, evaluate_tier1
 from indicators import compute_atr, compute_rsi, compute_vwap, rsi_series, session_bars
 from shared_state import AlertRecord, TickerSnapshot, state
 from state import TickerState
-from utils import is_market_open, load_watchlist, ms_to_et, now_et, today_str
+from utils import SESSION_OPEN, is_market_open, load_watchlist, ms_to_et, now_et, today_str
 
 log = logging.getLogger("vwap_scanner")
 
@@ -111,17 +111,6 @@ def spy_change_pct(spy_snapshot: dict | None) -> float:
 # Per-ticker helpers
 # ---------------------------------------------------------------------------
 
-def _build_vwap_series(bars: list[dict]) -> list[float]:
-    series = []
-    cum_vol = 0.0
-    cum_pv  = 0.0
-    for b in bars:
-        cum_vol += b["v"]
-        cum_pv  += b["vw"] * b["v"]
-        series.append(cum_pv / cum_vol if cum_vol else 0.0)
-    return series
-
-
 def _price_and_vwap_from_snapshot(snap: dict) -> tuple[float, float] | None:
     """Extract real-time current price and session VWAP from a snapshot response."""
     try:
@@ -175,9 +164,6 @@ def process_ticker(
 
     recent_closes = [bar["c"] for bar in closed_bars[-2:]]
     in_zone_now = c2_in_touch_zone(current_price, vwap, atr, recent_closes, ticker)
-
-    if current_price > vwap and not in_zone_now:
-        ticker_state.consecutive_above_vwap += 1
 
     if in_zone_now and not ticker_state.in_touch_zone:
         ticker_state.new_touch()
@@ -445,7 +431,7 @@ class Scanner:
             now   = now_et()
             today = now.strftime("%Y-%m-%d")
 
-            if today != self._last_reset_date and now.time() >= __import__("utils").SESSION_OPEN:
+            if today != self._last_reset_date and now.time() >= SESSION_OPEN:
                 self._reset_daily(today)
 
             market_open = is_market_open()
@@ -475,7 +461,10 @@ class Scanner:
 
             if now.hour == 15 and now.minute >= 55:
                 self._send_eod_summary()
-                time.sleep(3600)
+                log.info("End-of-day — scanner idle until next session")
+                deadline = time.monotonic() + 3600
+                while self._running and time.monotonic() < deadline:
+                    time.sleep(5)
                 continue
 
             time.sleep(1)

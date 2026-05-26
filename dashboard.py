@@ -38,7 +38,7 @@ def _check_token(f):
 
 def create_app() -> Flask:
     app = Flask(__name__)
-    app.secret_key = _TOKEN  # session signing key
+    app.secret_key = os.environ.get("SECRET_KEY") or os.urandom(24)
 
     @app.route("/")
     @_check_token
@@ -270,12 +270,6 @@ def _vix_fmt(vix: float) -> str:
     return f'<span class="{cls}">VIX {vix:.1f}</span>'
 
 
-def _touch_popup_data(ticker: str, history: list[dict]) -> str:
-    """Encode touch history as a JSON-safe data attribute string."""
-    import json
-    return json.dumps(history)
-
-
 def _ticker_rows(s: dict) -> str:
     rows = []
     for ticker in s["tickers"]:
@@ -298,11 +292,9 @@ def _ticker_rows(s: dict) -> str:
         touch_history = s.get("touch_history", {}).get(ticker, [])
 
         if touch_count > 0 and touch_history:
-            import json
-            data = json.dumps(touch_history).replace("'", "&#39;").replace('"', "&quot;")
             touch_cell = (
                 f'<span class="touch-btn" '
-                f'data-ticker="{ticker}" data-touches="{data}" '
+                f'data-ticker="{ticker}" '
                 f'onclick="showTouches(this)" '
                 f'title="Click to see touch history">'
                 f'{touch_count}</span>'
@@ -351,7 +343,8 @@ def _render_dashboard() -> str:
     badge = _badge(s)
     spy   = _spy_fmt(s["spy_chg"])
     vix   = _vix_fmt(s["vix"])
-    cond_json = json.dumps({k: list(v) for k, v in _COND_DESC.items()})
+    cond_json       = json.dumps({k: list(v) for k, v in _COND_DESC.items()})
+    touch_data_json = json.dumps(s.get("touch_history", {}))
 
     ticker_rows = _ticker_rows(s)
     alert_rows  = _alert_rows(s["alerts_today"])
@@ -443,7 +436,8 @@ def _render_dashboard() -> str:
 </div>
 
 <script>
-var COND_INFO = {cond_json};
+var COND_INFO   = {cond_json};
+var TOUCH_DATA  = {touch_data_json};
 
 function showCond(key) {{
   var info = COND_INFO[key];
@@ -458,7 +452,7 @@ function closeCond() {{
 
 function showTouches(el) {{
   var ticker  = el.dataset.ticker;
-  var touches = JSON.parse(el.dataset.touches.replace(/&quot;/g, '"').replace(/&#39;/g, "'"));
+  var touches = TOUCH_DATA[ticker] || [];
   document.getElementById('touch-title').textContent = ticker + ' — Touch History';
   var body = document.getElementById('touch-body');
   body.innerHTML = '';
@@ -570,7 +564,7 @@ def _radar_rows(scores: list[dict]) -> str:
 
         rows.append(f"""
         <tr>
-          <td class="ticker"><a href="/api/reflexivity/ticker/{r['symbol']}?token=" style="color:#f0f6fc">{r['symbol']}</a></td>
+          <td class="ticker"><a href="/api/reflexivity/ticker/{r['symbol']}?token={_TOKEN}" style="color:#f0f6fc">{r['symbol']}</a></td>
           <td>{_score_bar(comp, bar_col)}</td>
           <td>{_score_bar(r.get('momentum_score', 0),  '#79c0ff')}</td>
           <td>{_score_bar(r.get('volume_score', 0),    '#d2a8ff')}</td>
@@ -670,7 +664,7 @@ function renderRows(scores) {{
       ? '<span class="exit-flag">EXIT</span>'
       : '<span class="dim">—</span>';
     html += '<tr>'
-      + '<td class="ticker">' + r.symbol + '</td>'
+      + '<td class="ticker"><a href="/api/reflexivity/ticker/' + r.symbol + '?token=' + TOKEN + '" style="color:#f0f6fc">' + r.symbol + '</a></td>'
       + '<td>' + barHtml(comp, bc) + '</td>'
       + '<td>' + barHtml(r.momentum_score  || 0, '#79c0ff') + '</td>'
       + '<td>' + barHtml(r.volume_score    || 0, '#d2a8ff') + '</td>'
