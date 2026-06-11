@@ -24,6 +24,7 @@ import threading
 from flask import Blueprint, jsonify, request, render_template_string
 
 from .garp_scanner import MMDClient, extract_metrics, score_universe
+from .sp500_tickers import SP500_TICKERS
 from dataclasses import asdict
 
 garp_bp = Blueprint("garp", __name__, url_prefix="/garp")
@@ -41,11 +42,36 @@ DEFAULT_WATCHLIST = [
     "SOFI", "POET", "IBM", "RDDT",
 ]
 
+# Full S&P 500 scan runs in the background — too slow (~500 tickers x several
+# API calls each) to serve synchronously within an HTTP request/proxy timeout.
+_sp500_state = {"status": "idle", "progress": 0, "total": len(SP500_TICKERS), "data": None, "ts": 0, "error": None}
+_sp500_lock = threading.Lock()
+
 
 def _run_scan(tickers):
     client = MMDClient()
     metrics = [extract_metrics(client, t) for t in tickers]
     return [asdict(s) for s in score_universe(metrics)]
+
+
+def _run_sp500_scan():
+    with _sp500_lock:
+        if _sp500_state["status"] == "running":
+            return
+        _sp500_state.update(status="running", progress=0, total=len(SP500_TICKERS), error=None)
+    try:
+        client = MMDClient()
+        metrics = []
+        for i, t in enumerate(SP500_TICKERS):
+            metrics.append(extract_metrics(client, t))
+            with _sp500_lock:
+                _sp500_state["progress"] = i + 1
+        data = [asdict(s) for s in score_universe(metrics)]
+        with _sp500_lock:
+            _sp500_state.update(status="done", data=data, ts=time.time())
+    except Exception as e:
+        with _sp500_lock:
+            _sp500_state.update(status="error", error=str(e))
 
 
 @garp_bp.route("/api/scan")
@@ -60,6 +86,26 @@ def api_scan():
     with _lock:
         _cache.update(key=key, ts=time.time(), data=data)
     return jsonify({"cached": False, "results": data})
+
+
+@garp_bp.route("/api/scan/sp500")
+def api_scan_sp500():
+    with _sp500_lock:
+        state = dict(_sp500_state)
+
+    if state["status"] == "done" and time.time() - state["ts"] < CACHE_TTL:
+        return jsonify({"status": "done", "cached": True, "results": state["data"]})
+
+    if state["status"] != "running":
+        threading.Thread(target=_run_sp500_scan, name="garp-sp500-scan", daemon=True).start()
+
+    with _sp500_lock:
+        return jsonify({
+            "status": "scanning",
+            "progress": _sp500_state["progress"],
+            "total": _sp500_state["total"],
+            "error": _sp500_state["error"],
+        })
 
 
 PAGE = """
@@ -80,20 +126,19 @@ PAGE = """
 <h1>GARP PLUS — 5-Factor Sector-Relative Scan</h1>
 <div class="sub">Value 20% · Growth 20% · Profitability 25% · Momentum 20% · Revisions 15% · PEG circuit breaker active</div>
 <input id="tk" placeholder="Tickers (blank = default watchlist)">
-<button onclick="scan()">Scan</button> <span id="st" class="sub"></span>
+<button onclick="scan()">Scan</button>
+<button onclick="scanSP500()">S&amp;P 500 (full scan)</button>
+<span id="st" class="sub"></span>
 <table id="tbl"><thead><tr>
 <th>Ticker</th><th>Verdict</th><th>Score</th><th>Val</th><th>Grw</th><th>Prof</th>
 <th>Mom</th><th>Rev</th><th>PEG</th><th>PEG-G</th><th>Price</th><th>Sector</th>
 </tr></thead><tbody></tbody></table>
 <script>
+let sp500Timer = null;
 function gc(g){return 'g-'+(g||'').replace('+','p').replace('-','m');}
-async function scan(){
- const st=document.getElementById('st'); st.textContent='Scanning… (cold scan can take ~1s/ticker)';
- const q=document.getElementById('tk').value.trim();
- const r=await fetch('/garp/api/scan'+(q?('?tickers='+encodeURIComponent(q)):''));
- const j=await r.json(); st.textContent=(j.cached?'cached':'fresh')+' · '+j.results.length+' names';
+function renderResults(results){
  const tb=document.querySelector('#tbl tbody'); tb.innerHTML='';
- for(const s of j.results){
+ for(const s of results){
   const g=s.factor_grades||{};
   tb.insertAdjacentHTML('beforeend',`<tr>
    <td><b>${s.ticker}</b></td>
@@ -108,6 +153,30 @@ async function scan(){
    <td class="${gc(s.peg_grade)}">${s.peg_grade}</td>
    <td>${s.price?('$'+s.price.toFixed(2)):'--'}</td>
    <td style="color:#8b949e">${s.sector}</td></tr>`);
+ }
+}
+async function scan(){
+ if(sp500Timer){clearInterval(sp500Timer); sp500Timer=null;}
+ const st=document.getElementById('st'); st.textContent='Scanning… (cold scan can take ~1s/ticker)';
+ const q=document.getElementById('tk').value.trim();
+ const r=await fetch('/garp/api/scan'+(q?('?tickers='+encodeURIComponent(q)):''));
+ const j=await r.json(); st.textContent=(j.cached?'cached':'fresh')+' · '+j.results.length+' names';
+ renderResults(j.results);
+}
+async function scanSP500(){
+ const st=document.getElementById('st');
+ const r=await fetch('/garp/api/scan/sp500');
+ const j=await r.json();
+ if(j.status==='done'){
+  if(sp500Timer){clearInterval(sp500Timer); sp500Timer=null;}
+  st.textContent=(j.cached?'cached':'fresh')+' · '+j.results.length+' names (S&P 500)';
+  renderResults(j.results);
+ } else if(j.status==='error'){
+  if(sp500Timer){clearInterval(sp500Timer); sp500Timer=null;}
+  st.textContent='Error: '+j.error;
+ } else {
+  st.textContent='Scanning S&P 500… '+j.progress+'/'+j.total+' (background, ~1s/ticker — leave this open)';
+  if(!sp500Timer) sp500Timer=setInterval(scanSP500, 5000);
  }
 }
 scan();
