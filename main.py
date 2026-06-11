@@ -55,6 +55,10 @@ def main() -> None:
 
     # --- Flask dashboard (main thread) ---
     app  = create_app()
+
+    from src.scanner.garp.garp_routes import garp_bp
+    app.register_blueprint(garp_bp)
+
     port = int(os.environ.get("PORT", 8080))
     log.info("Dashboard starting on port %d", port)
 

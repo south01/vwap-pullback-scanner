@@ -379,6 +379,7 @@ def _render_dashboard() -> str:
     <span>T1: <b class="t1">{s['tier1_count']}</b></span>
     <span>T2: <b class="t2">{s['tier2_count']}</b></span>
     <span style="margin-left:16px"><a href="/loop-radar" style="color:#d2a8ff;font-weight:bold;font-size:12px">🔄 Loop Radar</a></span>
+    <span style="margin-left:16px"><a href="/garp" style="color:#58a6ff;font-weight:bold;font-size:12px">GARP</a></span>
   </span>
 </header>
 
